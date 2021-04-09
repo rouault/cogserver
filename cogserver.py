@@ -74,6 +74,10 @@ TIFFTAG_TILEWIDTH = 322     # tile width in pixels
 TIFFTAG_TILELENGTH = 323    # tile height in pixels
 TIFFTAG_TILEOFFSETS = 324   # offsets to data tiles
 TIFFTAG_TILEBYTECOUNTS = 325  # byte counts for tiles
+TIFFTAG_EXTRASAMPLES = 338  # info about extra samples
+EXTRASAMPLE_UNSPECIFIED = 0  # unspecified data
+EXTRASAMPLE_ASSOCALPHA = 1  # associated alpha data
+EXTRASAMPLE_UNASSALPHA = 2  # unassociated alpha data
 TIFFTAG_SAMPLEFORMAT = 339   # data sample format
 SAMPLEFORMAT_UINT = 1        # unsigned integer data
 SAMPLEFORMAT_INT = 2         # signed integer data
@@ -126,6 +130,31 @@ class TIFFGenerator:
         self.long_size = 4
         self.num_tags = 12  # must be updated if adding new tag!
         self.tags_written = 0
+
+        if rast.num_bands >= 3 and rast.ds.GetRasterBand(1).GetColorInterpretation() == gdal.GCI_RedBand:
+            self.photometric = PHOTOMETRIC_RGB
+        else:
+            self.photometric = PHOTOMETRIC_MINISBLACK
+
+        self.extrasamples = None
+        if rast.num_bands == 2 or \
+            (rast.num_bands == 3 and self.photometric == PHOTOMETRIC_MINISBLACK) or \
+                (rast.num_bands > 3 and self.photometric == PHOTOMETRIC_RGB):
+            self.num_tags += 1  # need TIFFTAG_EXTRASAMPLES
+            if self.photometric == PHOTOMETRIC_RGB:
+                num_extrasamples = rast.num_bands-3
+                first_extrasample_band = 4
+            else:
+                num_extrasamples = rast.num_bands-1
+                first_extrasample_band = 2
+
+            if rast.ds.GetRasterBand(first_extrasample_band).GetColorInterpretation() == gdal.GCI_AlphaBand:
+                first_extrasample = EXTRASAMPLE_UNASSALPHA
+            else:
+                first_extrasample = EXTRASAMPLE_UNSPECIFIED
+
+            self.extrasamples = struct.pack('<I', first_extrasample) + b'\x00'.join(
+                struct.pack('<I', EXTRASAMPLE_UNSPECIFIED) for i in range(num_extrasamples-1))
 
         self._geotiff_tags()
 
@@ -211,6 +240,8 @@ class TIFFGenerator:
         sz = self._getheadersize_without_tag_data()
         if rast.num_bands > 1:
             sz += self.long_size * rast.num_bands
+        if self.extrasamples is not None and len(self.extrasamples) > self.long_size:
+            sz += len(self.extrasamples)
         sz += sum(len(t[3]) for t in self.geotifftags)
         if self.nodata:
             sz += len(self.nodata)
@@ -249,8 +280,8 @@ class TIFFGenerator:
         r += self.write_tag(TIFFTAG_COMPRESSION,
                             TIFF_LONG, 1, COMPRESSION_NONE)
 
-        r += self.write_tag(TIFFTAG_PHOTOMETRIC, TIFF_LONG, 1,
-                            PHOTOMETRIC_MINISBLACK if rast.num_bands != 3 else PHOTOMETRIC_RGB)
+        r += self.write_tag(TIFFTAG_PHOTOMETRIC,
+                            TIFF_LONG, 1, self.photometric)
 
         r += self.write_tag(TIFFTAG_SAMPLESPERPIXEL,
                             TIFF_LONG, 1, rast.num_bands)
@@ -268,6 +299,12 @@ class TIFFGenerator:
             tilebytecounts_offset = self.tilesize()
         else:
             offset = tag_data_offset
+            if self.extrasamples is not None and len(self.extrasamples) > self.long_formatter:
+                offset += len(self.extrasamples)
+            for gttag in self.geotifftags:
+                offset += len(gttag[3])
+            if self.nodata is not None:
+                offset += len(self.nodata)
             tileoffsets_offset = offset
             offset += rast.tile_count * self.tileoffsetsize
             tilebytecounts_offset = offset
@@ -277,6 +314,15 @@ class TIFFGenerator:
 
         r += self.write_tag(TIFFTAG_TILEBYTECOUNTS, self.tileoffsetype,
                             rast.tile_count, tilebytecounts_offset)
+
+        if self.extrasamples is not None:
+            if len(self.extrasamples) > self.long_size:
+                r += self.write_tag(TIFFTAG_EXTRASAMPLES, TIFF_LONG,
+                                    len(self.extrasamples) // self.long_size, tag_data_offset)
+                tag_data_offset += len(self.extrasamples)
+            else:
+                r += self.write_tag(TIFFTAG_EXTRASAMPLES, TIFF_LONG, 1,
+                                    struct.unpack('<I', self.extrasamples)[0])
 
         if rast.datatype in (gdal.GDT_Byte, gdal.GDT_UInt16, gdal.GDT_UInt32):
             sampleformat = SAMPLEFORMAT_UINT
@@ -306,6 +352,9 @@ class TIFFGenerator:
 
         next_ifd_offset = 0
         r += struct.pack(self.ifd_offset_formatter, next_ifd_offset)
+
+        if self.extrasamples is not None and len(self.extrasamples) > self.long_size:
+            r += self.extrasamples
 
         if rast.num_bands > 1:
             for i in range(rast.num_bands):
