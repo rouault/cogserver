@@ -12,7 +12,6 @@ Quality: *proof-of-concept*
 
 What remains to be implemented:
 - expose metadata in GDAL_METADATA tag
-- expose nodata
 - allow compression
 - expose overviews when they exist
 

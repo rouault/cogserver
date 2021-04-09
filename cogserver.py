@@ -129,6 +129,12 @@ class TIFFGenerator:
 
         self._geotiff_tags()
 
+        self.nodata = None
+        nv = rast.ds.GetRasterBand(1).GetNoDataValue()
+        if nv is not None:
+            self.num_tags += 1
+            self.nodata = str(nv).encode('ascii') + b'   \x00'
+
         self._init()
         if not self.bigtiff and self.getfilesize() >= (1 << 32):
             self.bigtiff = True
@@ -206,6 +212,8 @@ class TIFFGenerator:
         if rast.num_bands > 1:
             sz += self.long_size * rast.num_bands
         sz += sum(len(t[3]) for t in self.geotifftags)
+        if self.nodata:
+            sz += len(self.nodata)
         return sz
 
     def write_tag(self, tagid, tagtype, num_occurences, tagvalueoroffset):
@@ -289,6 +297,11 @@ class TIFFGenerator:
             r += self.write_tag(gttag[0], gttag[1], gttag[2], tag_data_offset)
             tag_data_offset += len(gttag[3])
 
+        if self.nodata is not None:
+            r += self.write_tag(TIFFTAG_GDAL_NODATA,
+                                TIFF_ASCII, len(self.nodata), tag_data_offset)
+            tag_data_offset += len(self.nodata)
+
         assert self.tags_written == self.num_tags
 
         next_ifd_offset = 0
@@ -300,6 +313,9 @@ class TIFFGenerator:
 
         for gttag in self.geotifftags:
             r += gttag[3]
+
+        if self.nodata is not None:
+            r += self.nodata
 
         return r
 
