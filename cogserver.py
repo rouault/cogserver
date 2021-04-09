@@ -101,7 +101,8 @@ class TIFFGenerator:
         self.bigtiff = False
         self.long_formatter = '<I'
         self.long_size = 4
-        self.num_tags = 12
+        self.num_tags = 12  # must be updated if adding new tag!
+        self.tags_written = 0
         self._init()
         if not self.bigtiff and self.getfilesize() >= (1 << 32):
             self.bigtiff = True
@@ -149,6 +150,7 @@ class TIFFGenerator:
         r += struct.pack('<H', tagtype)
         r += struct.pack(self.number_of_values_formatter, num_occurences)
         r += struct.pack(self.tag_data_or_offset_formatter, tagvalueoroffset)
+        self.tags_written += 1
         return r
 
     def generate_header(self):
@@ -207,6 +209,8 @@ class TIFFGenerator:
 
         r += self.write_tag(TIFFTAG_SAMPLEFORMAT,
                             TIFF_LONG, 1, SAMPLEFORMAT_UINT)
+
+        assert self.tags_written == self.num_tags
 
         next_ifd_offset = 0
         r += struct.pack(self.ifd_offset_formatter, next_ifd_offset)
