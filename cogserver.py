@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler
 from socketserver import TCPServer, BaseRequestHandler
 from typing import Tuple, Callable
 import struct
+import uuid
 
 
 TIFF_BYTE = 1        # 8-bit unsigned integer
@@ -48,6 +49,11 @@ TIFF_IFD = 13        # 32-bit unsigned integer (offset)
 TIFF_LONG8 = 16      # BigTIFF 64-bit unsigned integer
 TIFF_SLONG8 = 17     # BigTIFF 64-bit signed integer
 TIFF_IFD8 = 18       # BigTIFF 64-bit unsigned integer (offset)
+
+datatypesize = {}
+datatypesize[TIFF_ASCII] = 1
+datatypesize[TIFF_SHORT] = 2
+datatypesize[TIFF_DOUBLE] = 8
 
 TIFFTAG_IMAGEWIDTH = 256    # image width in pixels
 TIFFTAG_IMAGELENGTH = 257   # image height in pixels
@@ -74,6 +80,23 @@ SAMPLEFORMAT_INT = 2         # signed integer data
 SAMPLEFORMAT_IEEEFP = 3      # IEEE floating point data
 SAMPLEFORMAT_COMPLEXINT = 5  # complex signed int
 SAMPLEFORMAT_COMPLEXIEEEFP = 6  # complex ieee floating
+
+# GeoTIFF tags
+TIFFTAG_GEOPIXELSCALE = 33550
+TIFFTAG_GEOTIEPOINTS = 33922
+TIFFTAG_GEOTRANSMATRIX = 34264
+TIFFTAG_GEOKEYDIRECTORY = 34735
+TIFFTAG_GEODOUBLEPARAMS = 34736
+TIFFTAG_GEOASCIIPARAMS = 34737
+geotiff_tagids = [TIFFTAG_GEOPIXELSCALE,
+                  TIFFTAG_GEOTIEPOINTS,
+                  TIFFTAG_GEOTRANSMATRIX,
+                  TIFFTAG_GEOKEYDIRECTORY,
+                  TIFFTAG_GEODOUBLEPARAMS,
+                  TIFFTAG_GEOASCIIPARAMS]
+
+TIFFTAG_GDAL_METADATA = 42112
+TIFFTAG_GDAL_NODATA = 42113
 
 gdal.UseExceptions()
 gdal_3_3 = int(gdal.VersionInfo('VERSION_NUM')) >= 3030000
@@ -103,6 +126,9 @@ class TIFFGenerator:
         self.long_size = 4
         self.num_tags = 12  # must be updated if adding new tag!
         self.tags_written = 0
+
+        self._geotiff_tags()
+
         self._init()
         if not self.bigtiff and self.getfilesize() >= (1 << 32):
             self.bigtiff = True
@@ -135,6 +161,42 @@ class TIFFGenerator:
             self.tileoffsetype = TIFF_LONG
             self.tileoffsetsize = 4
 
+    def _geotiff_tags(self):
+        tmpfilename = '/vsimem/' + str(uuid.uuid1()) + '.tif'
+        tmp_ds = gdal.GetDriverByName('GTiff').Create(tmpfilename, 1, 1)
+        gcps = rast.ds.GetGCPs()
+        if gcps:
+            tmp_ds.SetGCPS(gcps, rast.ds.GetGCPProjection())
+        else:
+            tmp_ds.SetSpatialRef(rast.ds.GetSpatialRef())
+            gt = rast.ds.GetGeoTransform(can_return_null=True)
+            if gt:
+                tmp_ds.SetGeoTransform(gt)
+        tmp_ds = None
+        f = gdal.VSIFOpenL(tmpfilename, 'rb')
+        maxsize = 100 * 1000
+        data = gdal.VSIFReadL(1, maxsize, f)
+        gdal.VSIFCloseL(f)
+        gdal.Unlink(tmpfilename)
+        assert len(data) < maxsize
+
+        assert data[0:4] == b'\x49\x49\x2A\x00'
+        assert data[4:8] == b'\x08\x00\x00\x00'
+        num_tags = struct.unpack('H', data[8:10])[0]
+        offset = 10
+        self.geotifftags = []
+        for i in range(num_tags):
+            tagid = struct.unpack('H', data[offset:offset+2])[0]
+            if tagid in geotiff_tagids:
+                tagtype = struct.unpack('H', data[offset+2:offset+4])[0]
+                valrepeat = struct.unpack('I', data[offset+4:offset+8])[0]
+                valoroffset = struct.unpack('I', data[offset+8:offset+12])[0]
+                assert valoroffset >= 10 + num_tags * 12
+                self.geotifftags.append((tagid, tagtype, valrepeat,
+                                         data[valoroffset:valoroffset+valrepeat*datatypesize[tagtype]]))
+                self.num_tags += 1
+            offset += 12
+
     def _getheadersize_without_tag_data(self):
         return self.sig_size + self.ifd_offset_size + self.num_tags_size + \
             self.num_tags * self.tagsize + self.ifd_offset_size
@@ -143,6 +205,7 @@ class TIFFGenerator:
         sz = self._getheadersize_without_tag_data()
         if rast.num_bands > 1:
             sz += self.long_size * rast.num_bands
+        sz += sum(len(t[3]) for t in self.geotifftags)
         return sz
 
     def write_tag(self, tagid, tagtype, num_occurences, tagvalueoroffset):
@@ -196,10 +259,10 @@ class TIFFGenerator:
             tileoffsets_offset = data_offset
             tilebytecounts_offset = self.tilesize()
         else:
-            tileoffsets_offset = tag_data_offset
-            tag_data_offset += rast.tile_count * self.tileoffsetsize
-            tilebytecounts_offset = tag_data_offset
-            tag_data_offset += rast.tile_count * self.tileoffsetsize
+            offset = tag_data_offset
+            tileoffsets_offset = offset
+            offset += rast.tile_count * self.tileoffsetsize
+            tilebytecounts_offset = offset
 
         r += self.write_tag(TIFFTAG_TILEOFFSETS, self.tileoffsetype,
                             rast.tile_count, tileoffsets_offset)
@@ -222,6 +285,10 @@ class TIFFGenerator:
 
         r += self.write_tag(TIFFTAG_SAMPLEFORMAT, TIFF_LONG, 1, sampleformat)
 
+        for gttag in self.geotifftags:
+            r += self.write_tag(gttag[0], gttag[1], gttag[2], tag_data_offset)
+            tag_data_offset += len(gttag[3])
+
         assert self.tags_written == self.num_tags
 
         next_ifd_offset = 0
@@ -230,6 +297,9 @@ class TIFFGenerator:
         if rast.num_bands > 1:
             for i in range(rast.num_bands):
                 r += struct.pack(self.long_formatter, rast.bitspersample)
+
+        for gttag in self.geotifftags:
+            r += gttag[3]
 
         return r
 

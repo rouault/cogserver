@@ -11,7 +11,6 @@ GET Range header.
 Quality: *proof-of-concept*
 
 What remains to be implemented:
-- expose georeferencing through GeoTIFF tags
 - expose metadata in GDAL_METADATA tag
 - expose nodata
 - allow compression
