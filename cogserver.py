@@ -84,8 +84,8 @@ class Raster:
         self.ds = ds
         self.width = self.ds.RasterXSize
         self.height = self.ds.RasterYSize
-        self.bitspersample = gdal.GetDataTypeSize(
-            self.ds.GetRasterBand(1).DataType)
+        self.datatype = self.ds.GetRasterBand(1).DataType
+        self.bitspersample = gdal.GetDataTypeSize(self.datatype)
         self.num_bands = self.ds.RasterCount
         self.tile_width = 512
         self.tile_height = 512
@@ -207,8 +207,20 @@ class TIFFGenerator:
         r += self.write_tag(TIFFTAG_TILEBYTECOUNTS, self.tileoffsetype,
                             rast.tile_count, tilebytecounts_offset)
 
-        r += self.write_tag(TIFFTAG_SAMPLEFORMAT,
-                            TIFF_LONG, 1, SAMPLEFORMAT_UINT)
+        if rast.datatype in (gdal.GDT_Byte, gdal.GDT_UInt16, gdal.GDT_UInt32):
+            sampleformat = SAMPLEFORMAT_UINT
+        elif rast.datatype in (gdal.GDT_Int16, gdal.GDT_Int32):
+            sampleformat = SAMPLEFORMAT_INT
+        elif rast.datatype in (gdal.GDT_Float32, gdal.GDT_Float64):
+            sampleformat = SAMPLEFORMAT_IEEEFP
+        elif rast.datatype in (gdal.GDT_CInt16, gdal.GDT_CInt32):
+            sampleformat = SAMPLEFORMAT_COMPLEXINT
+        elif rast.datatype in (gdal.GDT_CFloat32, gdal.GDT_CFloat64):
+            sampleformat = SAMPLEFORMAT_COMPLEXIEEEFP
+        else:
+            assert False, "unhandled GDAL data type"
+
+        r += self.write_tag(TIFFTAG_SAMPLEFORMAT, TIFF_LONG, 1, sampleformat)
 
         assert self.tags_written == self.num_tags
 
@@ -255,7 +267,7 @@ class TIFFGenerator:
         if yoff + ysize > rast.height:
             ysize = rast.height - yoff
 
-        dt = rast.ds.GetRasterBand(1).DataType
+        dt = rast.datatype
         dtsize = gdal.GetDataTypeSize(dt) // 8
         buf_pixel_space = dtsize * rast.num_bands
         buf_line_space = buf_pixel_space*rast.tile_width
