@@ -138,7 +138,7 @@ class TIFFGenerator:
 
         self.extrasamples = None
         if rast.num_bands == 2 or \
-            (rast.num_bands == 3 and self.photometric == PHOTOMETRIC_MINISBLACK) or \
+            (rast.num_bands >= 3 and self.photometric == PHOTOMETRIC_MINISBLACK) or \
                 (rast.num_bands > 3 and self.photometric == PHOTOMETRIC_RGB):
             self.num_tags += 1  # need TIFFTAG_EXTRASAMPLES
             if self.photometric == PHOTOMETRIC_RGB:
@@ -153,7 +153,7 @@ class TIFFGenerator:
             else:
                 first_extrasample = EXTRASAMPLE_UNSPECIFIED
 
-            self.extrasamples = struct.pack('<I', first_extrasample) + b'\x00'.join(
+            self.extrasamples = struct.pack('<I', first_extrasample) + b''.join(
                 struct.pack('<I', EXTRASAMPLE_UNSPECIFIED) for i in range(num_extrasamples-1))
 
         self._geotiff_tags()
@@ -299,7 +299,7 @@ class TIFFGenerator:
             tilebytecounts_offset = self.tilesize()
         else:
             offset = tag_data_offset
-            if self.extrasamples is not None and len(self.extrasamples) > self.long_formatter:
+            if self.extrasamples is not None and len(self.extrasamples) > self.long_size:
                 offset += len(self.extrasamples)
             for gttag in self.geotifftags:
                 offset += len(gttag[3])
@@ -353,12 +353,12 @@ class TIFFGenerator:
         next_ifd_offset = 0
         r += struct.pack(self.ifd_offset_formatter, next_ifd_offset)
 
-        if self.extrasamples is not None and len(self.extrasamples) > self.long_size:
-            r += self.extrasamples
-
         if rast.num_bands > 1:
             for i in range(rast.num_bands):
                 r += struct.pack(self.long_formatter, rast.bitspersample)
+
+        if self.extrasamples is not None and len(self.extrasamples) > self.long_size:
+            r += self.extrasamples
 
         for gttag in self.geotifftags:
             r += gttag[3]
