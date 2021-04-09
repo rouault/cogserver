@@ -162,7 +162,8 @@ class TIFFGenerator:
         nv = rast.ds.GetRasterBand(1).GetNoDataValue()
         if nv is not None:
             self.num_tags += 1
-            self.nodata = str(nv).encode('ascii') + b'   \x00'
+            # Make sure this at least 8 bytes long, so to not be inlined in tagdata (for simplicity)
+            self.nodata = str(nv).encode('ascii') + (b' ' * 7) + b'\x00'
 
         self._init()
         if not self.bigtiff and self.getfilesize() >= (1 << 32):
