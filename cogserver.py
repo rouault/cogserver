@@ -144,6 +144,13 @@ class TIFFGenerator:
             sz += self.long_size * rast.num_bands
         return sz
 
+    def write_tag(self, tagid, tagtype, num_occurences, tagvalueoroffset):
+        r = struct.pack('<H', tagid)
+        r += struct.pack('<H', tagtype)
+        r += struct.pack(self.number_of_values_formatter, num_occurences)
+        r += struct.pack(self.tag_data_or_offset_formatter, tagvalueoroffset)
+        return r
+
     def generate_header(self):
         r = self.TIFF_SIGNATURE
         first_ifd_offset = self.sig_size + self.ifd_offset_size
@@ -153,59 +160,34 @@ class TIFFGenerator:
 
         r += struct.pack(self.num_tags_formatter, self.num_tags)
 
-        r += struct.pack('<H', TIFFTAG_IMAGEWIDTH)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, rast.width)
+        r += self.write_tag(TIFFTAG_IMAGEWIDTH, TIFF_LONG, 1, rast.width)
 
-        r += struct.pack('<H', TIFFTAG_IMAGELENGTH)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, rast.height)
+        r += self.write_tag(TIFFTAG_IMAGELENGTH, TIFF_LONG, 1, rast.height)
 
-        r += struct.pack('<H', TIFFTAG_BITSPERSAMPLE)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, rast.num_bands)
         if rast.num_bands > 1:
             bitspersample_offset = tag_data_offset
             tag_data_offset += self.long_size * rast.num_bands
-            r += struct.pack(self.tag_data_or_offset_formatter,
-                             bitspersample_offset)
+            bitspersample_value = bitspersample_offset
         else:
-            r += struct.pack(self.tag_data_or_offset_formatter,
-                             rast.bitspersample)
+            bitspersample_value = rast.bitspersample
+        r += self.write_tag(TIFFTAG_BITSPERSAMPLE, TIFF_LONG,
+                            rast.num_bands, bitspersample_value)
 
-        r += struct.pack('<H', TIFFTAG_COMPRESSION)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, COMPRESSION_NONE)
+        r += self.write_tag(TIFFTAG_COMPRESSION,
+                            TIFF_LONG, 1, COMPRESSION_NONE)
 
-        r += struct.pack('<H', TIFFTAG_PHOTOMETRIC)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter,
-                         PHOTOMETRIC_MINISBLACK if rast.num_bands != 3 else PHOTOMETRIC_RGB)
+        r += self.write_tag(TIFFTAG_PHOTOMETRIC, TIFF_LONG, 1,
+                            PHOTOMETRIC_MINISBLACK if rast.num_bands != 3 else PHOTOMETRIC_RGB)
 
-        r += struct.pack('<H', TIFFTAG_SAMPLESPERPIXEL)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, rast.num_bands)
+        r += self.write_tag(TIFFTAG_SAMPLESPERPIXEL,
+                            TIFF_LONG, 1, rast.num_bands)
 
-        r += struct.pack('<H', TIFFTAG_PLANARCONFIG)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter,
-                         PLANARCONFIG_CONTIG)
+        r += self.write_tag(TIFFTAG_PLANARCONFIG,
+                            TIFF_LONG, 1, PLANARCONFIG_CONTIG)
 
-        r += struct.pack('<H', TIFFTAG_TILEWIDTH)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, rast.tile_width)
+        r += self.write_tag(TIFFTAG_TILEWIDTH, TIFF_LONG, 1, rast.tile_width)
 
-        r += struct.pack('<H', TIFFTAG_TILELENGTH)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, rast.tile_height)
+        r += self.write_tag(TIFFTAG_TILELENGTH, TIFF_LONG, 1, rast.tile_height)
 
         if rast.tile_count == 1:
             data_offset = self.dataoffset()
@@ -217,21 +199,14 @@ class TIFFGenerator:
             tilebytecounts_offset = tag_data_offset
             tag_data_offset += rast.tile_count * self.tileoffsetsize
 
-        r += struct.pack('<H', TIFFTAG_TILEOFFSETS)
-        r += struct.pack('<H', self.tileoffsetype)
-        r += struct.pack(self.number_of_values_formatter, rast.tile_count)
-        r += struct.pack(self.tag_data_or_offset_formatter, tileoffsets_offset)
+        r += self.write_tag(TIFFTAG_TILEOFFSETS, self.tileoffsetype,
+                            rast.tile_count, tileoffsets_offset)
 
-        r += struct.pack('<H', TIFFTAG_TILEBYTECOUNTS)
-        r += struct.pack('<H', self.tileoffsetype)
-        r += struct.pack(self.number_of_values_formatter, rast.tile_count)
-        r += struct.pack(self.tag_data_or_offset_formatter,
-                         tilebytecounts_offset)
+        r += self.write_tag(TIFFTAG_TILEBYTECOUNTS, self.tileoffsetype,
+                            rast.tile_count, tilebytecounts_offset)
 
-        r += struct.pack('<H', TIFFTAG_SAMPLEFORMAT)
-        r += struct.pack('<H', TIFF_LONG)
-        r += struct.pack(self.number_of_values_formatter, 1)
-        r += struct.pack(self.tag_data_or_offset_formatter, SAMPLEFORMAT_UINT)
+        r += self.write_tag(TIFFTAG_SAMPLEFORMAT,
+                            TIFF_LONG, 1, SAMPLEFORMAT_UINT)
 
         next_ifd_offset = 0
         r += struct.pack(self.ifd_offset_formatter, next_ifd_offset)
